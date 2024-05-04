@@ -24,9 +24,11 @@ make sense out of each VM command, that is, understand what the
  the Hack platform. The VMTranslator drives the translation process.
 """
 
-import argparse
+import argparse, uuid
 from abc import ABC, abstractmethod
 from io import TextIOWrapper
+
+SEGMENT_TABLE = {"local": "LCL", "argument": "ARG", "this": "THIS", "that": "THAT"}
 
 
 class Command(ABC):
@@ -36,26 +38,44 @@ class Command(ABC):
 
 
 class Push(Command):
+    '''
+        push the value from the memory segment onto the stack
+    '''
     def __init__(self, args: list[str]):
         self.segment = args[0]
-        self.value = args[1]
+        self.value = int(args[1])
 
     def toasm(self) -> str:
+        # first set D equal to the value we want to push
         if self.segment == "constant":
             asm = f"""
             @{self.value}
             D=A
             """
+        elif self.segment == "temp":
+            asm = f"""
+            @{self.value + 5}
+            D=M
+            """
+        elif self.segment == "pointer":
+            asm = f"""
+            @{self.value + 3}
+            D=M
+            """
+        elif self.segment == "static":
+            asm = f"""
+            @static{self.value}
+            D=M
+            """
         else:
             asm = f"""
             @{self.value}
             D=A
-            @{self.segment}
+            @{SEGMENT_TABLE[self.segment]}
             A=M
             A=A+D
             D=M
             """
-
         asm += f"""
             @SP
             A=M
@@ -69,17 +89,37 @@ class Push(Command):
 class Pop(Command):
     def __init__(self, args: list[str]):
         self.segment = args[0]
-        self.value = args[1]
+        self.value = int(args[1])
 
     def toasm(self) -> str:
-        asm = f"""
-            // D = Addr
-            @{self.value}
+        if self.segment == "temp":
+            asm = f"""
+            @{self.value + 5}
             D=A
-            @{self.segment}
-            A=M
-            A=A+D
+            """
+        elif self.segment == "pointer":
+            asm = f"""
+            @{self.value + 3}
             D=A
+            """
+        elif self.segment == "static":
+            asm = f"""
+            @static{self.value}
+            D=A
+            """
+        else:
+            asm = f"""
+                @{self.value}
+                D=A
+                @{SEGMENT_TABLE[self.segment]}
+                A=M
+                A=A+D
+                D=A
+            """
+        asm += f"""
+            // [R13] == Addr
+            @R13
+            M=D
 
             // Decrement stack
             @SP
@@ -89,23 +129,234 @@ class Pop(Command):
             @SP
             A=M
             D=M
+
+            // Set memory to value from the stack
+            @R13
+            A=M
+            M=D
+        """
+        return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
+class Sub(Command):
+    def toasm(self) -> str:
+        asm = """
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Subtraction
+            @SP
+            M=M-1
+            A=M
+            D=M-D
+            // Save value onto stack
+            @SP
+            A=M
+            M=D
+            // Increment stack
+            @SP
+            M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n")])
 
 
 class Add(Command):
-    def toasm(self) -> str:
-        return "TODO: add"
-
-
-class Sub(Command):
     def toasm(self):
-        return "TODO: sub"
+        asm = """
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Addition
+            @SP
+            M=M-1
+            A=M
+            D=D+M
+            // Save value onto stack
+            @SP
+            A=M
+            M=D
+            // Increment stack
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class Neg(Command):
+    def toasm(self):
+        asm = """
+            @SP
+            M=M-1
+            A=M
+            M=-M
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class And(Command):
+    def toasm(self):
+        asm = """
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Addition
+            @SP
+            M=M-1
+            A=M
+            D=D&M
+            // Save value onto stack
+            @SP
+            A=M
+            M=D
+            // Increment stack
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class Or(Command):
+    def toasm(self):
+        asm = """
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Addition
+            @SP
+            M=M-1
+            A=M
+            D=D|M
+            // Save value onto stack
+            @SP
+            A=M
+            M=D
+            // Increment stack
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class Not(Command):
+    def toasm(self):
+        asm = """
+            @SP
+            M=M-1
+            A=M
+            M=!M
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class Eq(Command):
+    def toasm(self):
+        id = uuid.uuid4()
+        asm = f"""
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Subtraction
+            @SP
+            M=M-1
+            A=M
+            D=M-D
+            @TRUE{id}
+            D;JEQ
+
+            // Save false onto stack
+            @SP
+            A=M
+            M=0
+            @CONTINUE{id}
+            0;JMP
+
+            // save true onto stack
+            (TRUE{id})
+            @SP
+            A=M
+            M=-1
+
+            (CONTINUE{id})
+            // Increment stack
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class Gt(Command):
+    def toasm(self):
+        id = uuid.uuid4()
+        asm = f"""
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Subtraction
+            @SP
+            M=M-1
+            A=M
+            D=M-D
+            @TRUE{id}
+            D;JGT
+            // Save false onto stack
+            @SP
+            A=M
+            M=0
+            @CONTINUE{id}
+            0;JMP
+            // save true onto stack
+            (TRUE{id})
+            @SP
+            A=M
+            M=-1
+            (CONTINUE{id})
+            // Increment stack
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
+class Lt(Command):
+    def toasm(self):
+        id = uuid.uuid4()
+        asm = f"""
+            // D == first argument
+            @SP
+            M=M-1
+            A=M
+            D=M
+            // Do Subtraction
+            @SP
+            M=M-1
+            A=M
+            D=M-D
+            @TRUE{id}
+            D;JLT
+            // Save false onto stack
+            @SP
+            A=M
+            M=0
+            @CONTINUE{id}
+            0;JMP
+            // save true onto stack
+            (TRUE{id})
+            @SP
+            A=M
+            M=-1
+            (CONTINUE{id})
+            // Increment stack
+            @SP
+            M=M+1
+        """
+        return "\n".join([line.strip() for line in asm.split("\n")])
 
 
 class NOP(Command):
     def toasm(self) -> str:
-        return "nop"
+        return ""
 
 
 class Parser:
@@ -116,6 +367,24 @@ class Parser:
             return Push(tokens[1:])
         elif tokens[0].lower() == "pop":
             return Pop(tokens[1:])
+        elif tokens[0].lower() == "add":
+            return Add()
+        elif tokens[0].lower() == "sub":
+            return Sub()
+        elif tokens[0].lower() == "neg":
+            return Neg()
+        elif tokens[0].lower() == "and":
+            return And()
+        elif tokens[0].lower() == "or":
+            return Or()
+        elif tokens[0].lower() == "not":
+            return Not()
+        elif tokens[0].lower() == "gt":
+            return Gt()
+        elif tokens[0].lower() == "lt":
+            return Lt()
+        elif tokens[0].lower() == "eq":
+            return Eq()
         else:
             return NOP()
 
@@ -130,7 +399,8 @@ class Translator:
         with open(out, "w") as f:
             for line in self.program:
                 command = Parser.parse(line)
-                f.write(command.toasm()+"\n")
+                if command.toasm():
+                    f.write(command.toasm()+"\n")
 
 
 
