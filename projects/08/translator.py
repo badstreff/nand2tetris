@@ -27,7 +27,7 @@ make sense out of each VM command, that is, understand what the
 import argparse, uuid
 from abc import ABC, abstractmethod
 from io import TextIOWrapper
-import os 
+import os
 
 SEGMENT_TABLE = {"local": "LCL", "argument": "ARG", "this": "THIS", "that": "THAT"}
 
@@ -39,9 +39,10 @@ class Command(ABC):
 
 
 class Push(Command):
-    '''
-        push the value from the memory segment onto the stack
-    '''
+    """
+    push the value from the memory segment onto the stack
+    """
+
     def __init__(self, args: list[str], scope: str):
         self.segment = args[0]
         self.value = int(args[1])
@@ -183,6 +184,8 @@ class Add(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class Neg(Command):
     def toasm(self):
         asm = """
@@ -194,6 +197,8 @@ class Neg(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class And(Command):
     def toasm(self):
         asm = """
@@ -211,6 +216,8 @@ class And(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class Or(Command):
     def toasm(self):
         asm = """
@@ -228,6 +235,8 @@ class Or(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class Not(Command):
     def toasm(self):
         asm = """
@@ -240,6 +249,8 @@ class Not(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class Eq(Command):
     def toasm(self):
         id = uuid.uuid4()
@@ -268,6 +279,8 @@ class Eq(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class Gt(Command):
     def toasm(self):
         id = uuid.uuid4()
@@ -295,6 +308,8 @@ class Gt(Command):
             M=M+1
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
+
+
 class Lt(Command):
     def toasm(self):
         id = uuid.uuid4()
@@ -324,10 +339,12 @@ class Lt(Command):
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
 
+
 class Label(Command):
     def __init__(self, args: list[str], scope: str):
         self.label = args[0]
         self.scope = scope
+
     def toasm(self) -> str:
         asm = f"""
         // label {self.label} - {self.scope}
@@ -335,10 +352,12 @@ class Label(Command):
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
 
+
 class Goto(Command):
     def __init__(self, args: list[str], scope: str):
         self.label = args[0]
         self.scope = scope
+
     def toasm(self) -> str:
         asm = f"""
         // goto {self.label} - {self.scope}
@@ -347,10 +366,12 @@ class Goto(Command):
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
 
+
 class IfGoto(Command):
     def __init__(self, args: list[str], scope: str):
         self.label = args[0]
         self.scope = scope
+
     def toasm(self) -> str:
         asm = f"""
         // if-goto {self.label} - {self.scope}
@@ -362,11 +383,13 @@ class IfGoto(Command):
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
 
+
 class Function(Command):
     def __init__(self, args: list[str], scope: str):
         self.name = args[0]
         self.nVars = args[1]
         self.scope = scope
+
     def toasm(self) -> str:
         asm = f"""
         // function {self.name} {self.nVars} - {self.scope}
@@ -377,12 +400,14 @@ class Function(Command):
             asm += "\n" + Push(["constant", "0"], self.scope).toasm()
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
 
+
 class Call(Command):
-    def __init__(self, args: list[str], scope: str):
+    def __init__(self, args: list[str], scope: str, index: int):
         self.function = args[0]
         self.nArgs = args[1]
         self.scope = scope
-        self.index = 0
+        self.index = index
+
     def toasm(self) -> str:
         retAddr = f"{self.function}$ret.{self.index}"
         asm = f"""
@@ -441,9 +466,11 @@ class Call(Command):
         """
         return "\n".join([line.strip() for line in asm.split("\n") if line.strip()])
 
+
 class Return(Command):
     def __init__(self, scope: str):
         self.scope = scope
+
     def toasm(self) -> str:
         asm = f"""
         // return
@@ -513,7 +540,7 @@ class NOP(Command):
 
 class Parser:
     @staticmethod
-    def parse(command: str, scope: str) -> Command:
+    def parse(command: str, scope: str, index: int) -> Command:
         tokens = command.strip().split(" ")
         if tokens[0].lower() == "push":
             return Push(tokens[1:], scope)
@@ -546,7 +573,9 @@ class Parser:
         elif tokens[0].lower() == "function":
             return Function(tokens[1:], scope)
         elif tokens[0].lower() == "call":
-            return Call(tokens[1:], scope) # TODO: This should accept an index for appending to return labels
+            return Call(
+                tokens[1:], scope, index
+            ) 
         elif tokens[0].lower() == "return":
             return Return(scope)
         else:
@@ -561,23 +590,44 @@ class Translator:
         self.scope = scope
 
     def translate(self, out: str):
-        with open(out, "w") as f:
+        with open(out, "a") as f:
+            index = 0
             for line in self.program:
-                command = Parser.parse(line, self.scope)
+                command = Parser.parse(line, self.scope, index)
                 if command.toasm():
-                    f.write(command.toasm()+"\n")
+                    f.write(command.toasm() + "\n")
+                index += 1
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--src", action="store")
     args = parser.parse_args()
-    scope = os.path.split(args.src)[-1].split(".")[0]
-    path = os.path.split(args.src)[0]
-    out = os.path.join(path, scope+".asm")
-    with open(args.src, "r") as f:
-        translator = Translator(f, scope)
-        translator.translate(out)
+    src = []
+    if os.path.isdir(args.src):
+        base = os.path.basename(args.src)
+        path = args.src
+        dest = os.path.join(args.src, base) + ".asm"
+        src = [
+            os.path.join(args.src, file)
+            for file in os.listdir(args.src)
+            if os.path.isfile(os.path.join(args.src, file))
+        ]
+        src = [file for file in src if file[-3:] == ".vm"]
+    else:
+        base = os.path.basename(args.src).split(".")[0]
+        path = os.path.split(args.src)[0]
+        dest = os.path.join(path, base + ".asm")
+        src.append(args.src)
+    with open(dest, "w") as f:
+        f.write("\n".join(["@256", "D=A", "@SP", "M=D\n"]))
+        f.write(Call(["Sys.init", "0"], "init", 0).toasm())
+        f.write("\n")
+    for file in src:
+        with open(file, "r") as f:
+            scope = os.path.basename(file).split(".")[0]
+            translator = Translator(f, scope)
+            translator.translate(dest)
 
 
 if __name__ == "__main__":
