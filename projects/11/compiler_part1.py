@@ -2,9 +2,9 @@ import os
 import typing
 import argparse
 import pathlib
-from enum import StrEnum, auto
+from enum import Enum, StrEnum, auto
 import xml.etree.ElementTree as ET
-from VMWriter import VMWriter
+from dataclasses import dataclass
 
 
 
