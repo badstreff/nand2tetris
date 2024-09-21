@@ -31,7 +31,7 @@ class SymbolTable(object):
         for _, v in self._table.items():
             for sym in v:
                 if sym["name"] == name:
-                    return sym["type]"]
+                    return sym["type"]
         raise Exception(f"SymbolNotFound - {name}")
     def index_of(self, name: str) -> int:
         for _, v in self._table.items():

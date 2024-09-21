@@ -21,7 +21,7 @@ UNARY_TABLE = {
 IdentifierKindToMemorySegment = {
     IdentifierKind.ARG: MemorySegment.ARGUMENT,
     IdentifierKind.STATIC: MemorySegment.STATIC,
-    IdentifierKind.FIELD: MemorySegment.THIS,  # Not sure if this is actually correct, need to double check
+    IdentifierKind.FIELD: MemorySegment.THIS,
     IdentifierKind.VAR: MemorySegment.LOCAL
 }
 
@@ -68,8 +68,11 @@ class CompilationEngine(object):
 
     def compile_subroutine(self):
         self.subroutine_symbol_table.reset()
-        if self.tokenizer.current_token == "method":
+        subroutine_type = self.tokenizer.current_token
+        if subroutine_type == "method":
             self.subroutine_symbol_table.define("this", self.current_class_type, IdentifierKind.ARG)
+        elif subroutine_type not in ["constructor", "function"]:
+            raise Exception("Unknown subroutine type, must be one of - method, function, constructor")
         self._eat(TokenType.KEYWORD)
 
         if self.tokenizer.current_token in ["void", "boolean", "char", "int"]:
@@ -80,11 +83,10 @@ class CompilationEngine(object):
         self._eat(TokenType.IDENTIFIER)
         self._eat(TokenType.SYMBOL, "(")
         self.compile_parameter_list()
-        #FIXME: this always prints 0 for local vars because they don't actually get populated until we call compile_subroutine_body
-        #TODO: MAJOR BUG
         self._eat(TokenType.SYMBOL, ")")
-        self.compile_subroutine_body(self._scope_function_name(name))
-        print(self.subroutine_symbol_table._table)
+        # compile_subroutine_body actually needs to write the vm function command, because we don't actually know the local 
+        # var count until the function body is processed
+        self.compile_subroutine_body(self._scope_function_name(name), subroutine_type) 
     
     def _scope_function_name(self, name):
         return self.current_class_type + "." + name
@@ -102,11 +104,19 @@ class CompilationEngine(object):
             count += 1
         return count
 
-    def compile_subroutine_body(self, name):
+    def compile_subroutine_body(self, name: str, type: str):
         self._eat(TokenType.SYMBOL, "{")
         while self.tokenizer.current_token == "var":
             self.compile_var_dec()
         self.vmwriter.write_function(name, self.subroutine_symbol_table.var_count(IdentifierKind.VAR))
+        if type == "constructor":
+            num_fields = self.class_symbol_table.var_count(IdentifierKind.FIELD)
+            self.vmwriter.write_push(MemorySegment.CONSTANT, num_fields)
+            self.vmwriter.write_call("Memory.alloc", 1)
+            self.vmwriter.write_pop(MemorySegment.POINTER, 0)
+        elif type == "method":
+            self.vmwriter.write_push(MemorySegment.ARGUMENT, 0)
+            self.vmwriter.write_pop(MemorySegment.POINTER, 0)
         self.compile_statements()
         self._eat(TokenType.SYMBOL, "}")
 
@@ -140,28 +150,31 @@ class CompilationEngine(object):
                 self.compile_return() # 2nd
             else:
                 raise Exception("Unknown token for subroutine body")
-        return ET.Element("statements")  # TODO: DELETEME
 
     def compile_let(self):
         self._eat(TokenType.KEYWORD, "let")
         var_name = self.tokenizer.current_token
+        kind, index, _ = self._lookup_var(var_name)
         self._eat(TokenType.IDENTIFIER)
         # TODO: Handle this
         if self.tokenizer.current_token == "[":
+            self.vmwriter.write_push(IdentifierKindToMemorySegment[kind], index)
             self._eat(TokenType.SYMBOL, "[")
             self.compile_expression()
             self._eat(TokenType.SYMBOL, "]")
-        self._eat(TokenType.SYMBOL, "=")
-        self.compile_expression()
-        try:
-            kind = self.subroutine_symbol_table.kind_of(var_name)
-            index = self.subroutine_symbol_table.index_of(var_name)
-        except:
-            kind = self.class_symbol_table.kind_of(var_name)
-            index = self.class_symbol_table.index_of(var_name)
-        self.vmwriter.write_pop(IdentifierKindToMemorySegment[kind], index)
+            self.vmwriter.write_arithmetic(Command.ADD)
+            self._eat(TokenType.SYMBOL, "=")
+            self.compile_expression()
+            self.vmwriter.write_pop(MemorySegment.TEMP, 0)
+            self.vmwriter.write_pop(MemorySegment.POINTER, 1)
+            self.vmwriter.write_push(MemorySegment.TEMP, 0)
+            self.vmwriter.write_pop(MemorySegment.THAT, 0)
+        else:
+            self._eat(TokenType.SYMBOL, "=")
+            self.compile_expression()
+            self.vmwriter.write_pop(IdentifierKindToMemorySegment[kind], index)
         self._eat(TokenType.SYMBOL, ";")
-        return ET.Element("letStatement")
+    
 
     def compile_if(self):
         self.if_counter += 1
@@ -187,7 +200,6 @@ class CompilationEngine(object):
         self.vmwriter.write_label(label_if_true)
 
     def compile_while(self):
-        # TODO: make suure this works..
         self.while_counter += 1
         label_begin = f"{self.current_class_type.upper()}.BEGINWHILE{self.while_counter}"
         label_end = f"{self.current_class_type.upper()}.ENDWHILE{self.while_counter}"
@@ -206,19 +218,7 @@ class CompilationEngine(object):
 
     def compile_do(self):
         self._eat(TokenType.KEYWORD, "do")
-        function_name = self.tokenizer.current_token
-        self._eat(TokenType.IDENTIFIER)
-        if self.tokenizer.current_token == ".":
-            self._eat(TokenType.SYMBOL, ".")
-            function_name += "." + self.tokenizer.current_token
-            self._eat(TokenType.IDENTIFIER)
-        else:
-            function_name = self.current_class_type + "." + function_name
-        print(f"compiled do call to function name {function_name}")
-        self._eat(TokenType.SYMBOL, "(")
-        count = self.compile_expression_list()
-        self.vmwriter.write_call(function_name, count)
-        self._eat(TokenType.SYMBOL, ")")
+        self.compile_expression() # added :D
         self._eat(TokenType.SYMBOL, ";")
         self.vmwriter.write_pop(MemorySegment.TEMP, 0)
 
@@ -231,14 +231,11 @@ class CompilationEngine(object):
         self.vmwriter.write_return()
         self._eat(TokenType.SYMBOL, ";")
 
-    # example expression = 1 + (2 * 3)
     def compile_expression(self):
-        root = ET.Element("expression")
-        print(self.tokenizer.current_token)
         self.compile_term()
         while self.tokenizer.current_token in ["+", "-", "*", "/", "&", "|", "<", ">", "="]:
             op = self.tokenizer.current_token
-            self.process(root, TokenType.SYMBOL)
+            self._eat(TokenType.SYMBOL)
             self.compile_term()
             if op in OP_TABLE:
                 self.vmwriter.write_arithmetic(Command(OP_TABLE[op]))
@@ -248,8 +245,8 @@ class CompilationEngine(object):
                 self.vmwriter.write_call("Math.divide", 2)
             else:
                 raise Exception(f"Unknown operator encounted compiling expression: {op}")
-        return root
 
+    # there is a lot of room for improvement in this 'do everything' function
     def compile_term(self):
         # requires lookahead
         if self.tokenizer.token_type() == TokenType.INT_CONST:
@@ -257,7 +254,13 @@ class CompilationEngine(object):
             self._eat(TokenType.INT_CONST)
         elif self.tokenizer.token_type() == TokenType.STRING_CONST:
             # TODO
+            s = list(self.tokenizer.current_token[1:-1].encode("ascii"))
             self._eat(TokenType.STRING_CONST)
+            self.vmwriter.write_push(MemorySegment.CONSTANT, len(s))
+            self.vmwriter.write_call("String.new", 1)
+            for c in s:
+                self.vmwriter.write_push(MemorySegment.CONSTANT, c)
+                self.vmwriter.write_call("String.appendChar", 2)
         elif self.tokenizer.current_token in ["true", "false", "null", "this"]:
             keyword = self.tokenizer.current_token
             self._eat(TokenType.KEYWORD)
@@ -268,7 +271,7 @@ class CompilationEngine(object):
                 self.vmwriter.write_push(MemorySegment.CONSTANT, 0)
             elif keyword == "null":
                 self.vmwriter.write_push(MemorySegment.CONSTANT, 0)
-            else:
+            else: # this
                 self.vmwriter.write_push(MemorySegment.POINTER, 0)
         elif self.tokenizer.current_token == "(":
             self._eat(TokenType.SYMBOL, "(")
@@ -288,26 +291,44 @@ class CompilationEngine(object):
                 self._eat(TokenType.SYMBOL, "[")
                 self.compile_expression()
                 self._eat(TokenType.SYMBOL, "]")
+                kind, index, _ = self._lookup_var(prev)
+                self.vmwriter.write_push(IdentifierKindToMemorySegment[kind], index)
+                self.vmwriter.write_arithmetic(Command.ADD)
+                self.vmwriter.write_pop(MemorySegment.POINTER, 1)
+                self.vmwriter.write_push(MemorySegment.THAT, 0)
             elif self.tokenizer.current_token == "(": # subroutine call form <method>(args...)
-                # TODO, handle pushing this somehow
+                self.vmwriter.write_push(MemorySegment.POINTER, 0)
                 self._eat(TokenType.SYMBOL, "(")
                 count = self.compile_expression_list()
                 self._eat(TokenType.SYMBOL, ")")
-                self.vmwriter.write_call(self._scope_function_name(prev), count)
+                self.vmwriter.write_call(self._scope_function_name(prev), count+1)
             elif self.tokenizer.current_token == ".": # subroutine call form <class/var>.<method>(args...)
+                # print(f"we are calling some method in the form <class|object>.<function|method> obect/class = {prev}")
+                # print(self.class_symbol_table._table)
+                # print(self.subroutine_symbol_table._table)
                 try:
-                    kind = self.subroutine_symbol_table.index_of(prev)
+                    kind = self.subroutine_symbol_table.kind_of(prev)
                     index = self.subroutine_symbol_table.index_of(prev)
+                    prev = self.subroutine_symbol_table.type_of(prev)
                     self.vmwriter.write_push(IdentifierKindToMemorySegment[kind], index)
+                    arg_count = 1
                 except:
-                    print(f"{prev} must not be an object with a method")
+                    try:
+                        kind = self.class_symbol_table.kind_of(prev)
+                        index = self.class_symbol_table.index_of(prev)
+                        prev = self.class_symbol_table.type_of(prev)
+                        self.vmwriter.write_push(IdentifierKindToMemorySegment[kind], index)
+                        arg_count = 1
+                    except:
+                        # print(f"{prev} must not be an object with a method")
+                        arg_count = 0
                 self._eat(TokenType.SYMBOL, ".")
                 name = self.tokenizer.current_token
                 self._eat(TokenType.IDENTIFIER)
                 self._eat(TokenType.SYMBOL, "(")
-                count = self.compile_expression_list()
+                arg_count += self.compile_expression_list()
                 self._eat(TokenType.SYMBOL, ")")
-                self.vmwriter.write_call(prev+"."+name, count)
+                self.vmwriter.write_call(prev+"."+name, arg_count)
             else: # varName
                 try:
                     kind = self.subroutine_symbol_table.kind_of(prev)
@@ -317,8 +338,7 @@ class CompilationEngine(object):
                     index = self.class_symbol_table.index_of(prev)
                 self.vmwriter.write_push(IdentifierKindToMemorySegment[kind], index)
 
-    def compile_expression_list(self):# -> int:
-        # root = ET.Element("expressionList")
+    def compile_expression_list(self) -> int:
         count = 0
         while self.tokenizer.current_token != ")":
             count += 1
@@ -327,6 +347,16 @@ class CompilationEngine(object):
                 self._eat(TokenType.SYMBOL, ",")
         return count
 
+    def _lookup_var(self, name):
+        try:
+            kind = self.subroutine_symbol_table.kind_of(name)
+            index = self.subroutine_symbol_table.index_of(name)
+            type = self.subroutine_symbol_table.type_of(name)
+        except:
+            kind = self.class_symbol_table.kind_of(name)
+            index = self.class_symbol_table.index_of(name)
+            type = self.class_symbol_table.type_of(name)
+        return (kind, index, type)
     def _eat(self, type: TokenType, value=None):
         """
         validates that the token is of type type and advances the tokenizer
