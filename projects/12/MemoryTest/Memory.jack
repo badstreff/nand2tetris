@@ -35,17 +35,12 @@ class Memory {
     /** Finds an available RAM block of the given size and returns
      *  a reference to its base address. */
     function int alloc(int size) {
-        // simple first fit algorithm
         var int block, previous;
         let block = free;
         let previous = 0;
         while (block[0] < size + 1) {
             let previous = block; // retain a pointer to the previous block
             let block = block[1];
-            // if we cannot find any available memory just error, an alternative would be to defrag
-            if (block = 0) {
-                do Sys.error(1);
-            }
         }
         if (block[0] - size > 2) {
             // handle the case were we can carve off an existing section
@@ -54,7 +49,6 @@ class Memory {
             let block[0] = size + 1;
             return block;
         } else {
-            // if we must use the entire block patch the previous address location
             if (previous = 0) {
                 let free = block[1];
             } else {

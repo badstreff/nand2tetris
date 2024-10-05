@@ -266,6 +266,14 @@ class Output {
         // Just reset to top left corner for now.
         let cursor_x = 0;
         let cursor_y = 0;
+        
+        //var int address;
+        
+        //let address = 0;
+        //while( address < 255 ) {
+        //    let screen[address+32] = screen[address];
+        //    let address = address + 1;
+        //}
         return;
     }
     
