@@ -11,6 +11,8 @@ This was pretty fun to write, the implementation is pretty straight forward. I d
 
 My translator does not follow the recommended approach at all and I think this cost me quite a bit of time, taking this into account for future work...
 
+There is a TON of room for optimization here and probably with the assembler as well
+
 
 ### 10/11
 
